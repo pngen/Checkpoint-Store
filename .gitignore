@@ -1,0 +1,37 @@
+# Build directories
+/build/
+/build-*/
+/out/
+/install/
+cmake-build-*/
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.VC.db
+.cache/
+
+# Build artifacts
+*.obj
+*.o
+*.lib
+*.exe
+*.pdb
+*.ilk
+*.dll
+*.so
+*.a
+*.dylib
+*.log
+compile_commands.json
+CMakeLists.txt.user
+
+# Test / proof scratch
+/scratch/
+/test-*/
+/coverage*/
+*.profraw
+*.profdata
