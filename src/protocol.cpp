@@ -21,6 +21,7 @@ const char* to_string(MessageKind kind) noexcept {
         case MessageKind::kGcRun: return "GC_RUN";
         case MessageKind::kSave: return "SAVE";
         case MessageKind::kStatus: return "STATUS";
+        case MessageKind::kRetain: return "RETAIN";
         case MessageKind::kAdvanceEpoch: return "ADVANCE_EPOCH";
         case MessageKind::kAck: return "ACK";
         case MessageKind::kNack: return "NACK";

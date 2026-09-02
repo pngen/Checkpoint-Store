@@ -87,5 +87,8 @@ inline NackPayload decode_nack(ByteView v) {
 inline Bytes encode_register(std::uint64_t boot, const std::string& root) { BinWriter w; w.u64(boot); w.string(root); return w.data(); }
 inline std::pair<std::uint64_t,std::string> decode_register(ByteView v) { BinReader r(v); auto b=r.u64(); auto s=r.string(); return {b,s}; }
 
+inline Bytes encode_retain(std::uint64_t family, std::uint64_t latest_n) { BinWriter w; w.u64(family); w.u64(latest_n); return w.data(); }
+inline std::pair<std::uint64_t,std::uint64_t> decode_retain(ByteView v) { BinReader r(v); auto f=r.u64(); auto n=r.u64(); return {f,n}; }
+
 }  // namespace checkpointstore::proto_ops
 #endif

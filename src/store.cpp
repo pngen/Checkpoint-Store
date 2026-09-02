@@ -482,4 +482,9 @@ void CheckpointStore::set_coordinator_epoch(CoordinatorEpoch epoch) noexcept {
     coordinator_epoch_ = epoch;
 }
 
+void CheckpointStore::set_authority_boot(WorkerBootId boot) {
+    std::lock_guard<std::mutex> lock(impl_->mutex_);
+    options_.boot_id = boot;
+}
+
 }  // namespace checkpointstore

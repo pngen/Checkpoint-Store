@@ -155,6 +155,7 @@ public:
     void save_state();
     void load_state();
     void reset_authority();
+    void set_authority_boot(WorkerBootId boot);
 
     // ------------------------------------------------------------------
     // Authority / explanation helpers

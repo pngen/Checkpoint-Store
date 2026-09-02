@@ -84,6 +84,7 @@ int main(int argc, char** argv) {
     std::string host = "127.0.0.1";
     std::uint16_t port = 33123;
     std::uint64_t boot = 1;
+    std::uint64_t epoch = 1;
     std::string command;
     std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
@@ -91,23 +92,21 @@ int main(int argc, char** argv) {
         if (a == "--host" && i + 1 < argc) host = argv[++i];
         else if (a == "--port" && i + 1 < argc) port = (std::uint16_t)std::stoi(argv[++i]);
         else if (a == "--boot" && i + 1 < argc) boot = parse_u64(argv[++i]);
+        else if (a == "--epoch" && i + 1 < argc) epoch = parse_u64(argv[++i]);
         else { if (command.empty()) command = a; else args.push_back(a); }
     }
     WSADATA ws;
     WSAStartup(MAKEWORD(2, 2), &ws);
     Client c;
     c.boot = boot;
+    c.epoch = epoch;
     if (!c.connect_to(host.c_str(), port)) { std::cerr << "worker: connect failed\n"; WSACleanup(); return 1; }
 
     try {
         if (command == "register") {
             auto root = args.size() ? args[0] : std::string("cps-worker");
-            auto reply = c.request(P::MessageKind::kRegisterBackend,
-                                   ByteView(proto_ops::encode_register(boot, root).data(),
-                                            proto_ops::encode_register(boot, root).size()).data() ? ByteView() : ByteView());
-            // encode once
             auto enc = proto_ops::encode_register(boot, root);
-            reply = c.request(P::MessageKind::kRegisterBackend, ByteView(enc.data(), enc.size()));
+            auto reply = c.request(P::MessageKind::kRegisterBackend, ByteView(enc.data(), enc.size()));
             c.epoch = BinReader(ByteView(reply.data(), reply.size())).u64();
             std::cout << "WORKER[" << boot << "] registered; coordinator epoch=" << c.epoch << "\n";
         } else if (command == "family") {
@@ -148,10 +147,30 @@ int main(int argc, char** argv) {
             auto reply = c.request(P::MessageKind::kSave, ByteView(enc.data(), enc.size()));
             std::cout << "WORKER[" << boot << "] saved\n";
         } else if (command == "gc") {
-            auto enc = proto_ops::encode_u64(0);
+            proto_ops::AuthorityEnvelope a; a.boot = boot; a.epoch = c.epoch; a.generation = 1;
+            auto enc = proto_ops::encode_restore(a, 0);
             auto reply = c.request(P::MessageKind::kGcRun, ByteView(enc.data(), enc.size()));
             auto n = BinReader(ByteView(reply.data(), reply.size())).u64();
             std::cout << "WORKER[" << boot << "] gc reclaimed=" << n << "\n";
+        } else if (command == "retain") {
+            auto enc = proto_ops::encode_retain(parse_u64(args[0]), parse_u64(args[1]));
+            auto reply = c.request(P::MessageKind::kRetain, ByteView(enc.data(), enc.size()));
+            std::cout << "WORKER[" << boot << "] retention set latest=" << BinReader(ByteView(reply.data(), reply.size())).u64() << "\n";
+        } else if (command == "retire") {
+            std::uint64_t id = parse_u64(args[0]);
+            proto_ops::AuthorityEnvelope a; a.boot = boot; a.epoch = c.epoch; a.generation = 1;
+            auto enc = proto_ops::encode_restore(a, id);
+            auto reply = c.request(P::MessageKind::kRetire, ByteView(enc.data(), enc.size()));
+            std::cout << "WORKER[" << boot << "] retired id=" << id << "\n";
+        } else if (command == "hold") {
+            // A long-lived worker session: register, then optionally publish, then
+            // sleep so it can be killed as a real OS process while holding authority.
+            auto root = args.size() ? args[0] : std::string("cps-worker");
+            auto enc = proto_ops::encode_register(boot, root);
+            auto reply = c.request(P::MessageKind::kRegisterBackend, ByteView(enc.data(), enc.size()));
+            c.epoch = BinReader(ByteView(reply.data(), reply.size())).u64();
+            std::cout << "WORKER[" << boot << "] holding (registered; epoch=" << c.epoch << ")" << std::flush;
+            std::this_thread::sleep_for(std::chrono::seconds(3600));
         } else if (command == "sleep") {
             std::this_thread::sleep_for(std::chrono::milliseconds(parse_u64(args[0])));
             std::cout << "WORKER[" << boot << "] slept\n";

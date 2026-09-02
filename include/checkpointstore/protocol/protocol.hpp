@@ -28,6 +28,7 @@ enum class MessageKind : std::uint8_t {
     kGcRun,
     kSave,
     kStatus,
+    kRetain,
     kAdvanceEpoch,
     kAck,       // success response
     kNack,      // error response

@@ -10,6 +10,7 @@
 #include <ws2tcpip.h>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,41 +25,41 @@ public:
         std::filesystem::create_directories(data_root_ / "store");
         // Persist authority bootstrap: a coordinator epoch and current boot.
         StoreOptions o;
-        o.state_path = data_root_ / "metadata" / "checkpoint-store.state";
-        o.boot_id = WorkerBootId(boot_);
+        const auto state_path = data_root_ / "metadata" / "checkpoint-store.state";
+        o.state_path = state_path;
+        o.boot_id = WorkerBootId(coordinator_boot_);
         o.chunk_size = chunk_size;
         store_ = std::make_unique<CheckpointStore>(std::move(o));
         store_->register_backend(StorageBackendId(1),
                                  std::make_shared<LocalBackend>(data_root_ / "store", StorageBackendId(1)));
-        if (std::filesystem::exists(o.state_path)) {
+        if (std::filesystem::exists(state_path)) {
             store_->load_state();
         }
     }
 
-    void set_authority(std::uint64_t boot) {
-        boot_ = boot;
-        std::cout << "EVIDENCE: current authority boot=" << boot_ << " epoch=" << epoch_ << "\n";
-        store_->reset_authority();
-    }
     std::uint64_t epoch() const { return epoch_; }
-    std::uint64_t boot() const { return boot_; }
+    std::uint64_t boot() const { return active_boot_; }
 
-    // Returns true if the request carries the current authority.
-    bool authority_ok(const proto_ops::AuthorityEnvelope& a) {
-        if (a.boot != boot_) {
-            ++stale_rejections_;
-            return false;
-        }
-        if (a.epoch != epoch_) {
+    // Publish/retire/gc require the ACTIVE authority boot and the current epoch.
+    bool publish_authority_ok(const proto_ops::AuthorityEnvelope& a) {
+        if (a.boot != active_boot_ || a.epoch != epoch_) {
             ++stale_rejections_;
             return false;
         }
         return true;
     }
+    // Restore requires a REGISTERED worker with the current epoch (generation
+    // fencing): a stale epoch can never publish a fresh restored result.
+    bool restore_authority_ok(const proto_ops::AuthorityEnvelope& a) {
+        if (a.epoch != epoch_) { ++stale_rejections_; return false; }
+        if (roster_.count(a.boot) == 0) { ++stale_rejections_; return false; }
+        return true;
+    }
 
     void advance_epoch() {
         epoch_ += 1;
-        // A killed incarnation's authority is revoked; fresh boot required.
+        active_boot_ = 0;   // revoke the current incarnation's authority
+        std::cout << "EVIDENCE: epoch advanced to " << epoch_ << "; prior authority revoked\n";
         ++stale_rejections_;
     }
 
@@ -68,9 +69,14 @@ public:
                 case MessageKind::kRegisterBackend: {
                     auto [boot, root] = proto_ops::decode_register(payload);
                     registered_.push_back(boot);
-                    // The first registered worker becomes authority (unless one set).
-                    set_authority(boot);
-                    std::cout << "EVIDENCE: registered worker boot=" << boot << " root=" << root << "\n";
+                    roster_.insert(boot);
+                    if (active_boot_ == 0 && revoked_.count(boot) == 0) {
+                        active_boot_ = boot;
+                        store_->set_authority_boot(WorkerBootId(boot));
+                        store_->reset_authority();   // clear prior live authority
+                    }
+                    std::cout << "EVIDENCE: registered worker boot=" << boot << " root=" << root
+                              << " active=" << active_boot_ << " epoch=" << epoch_ << "\n";
                     return proto_ops::encode_u64(epoch_);
                 }
                 case MessageKind::kCreateFamily: {
@@ -81,7 +87,7 @@ public:
                 }
                 case MessageKind::kPublish: {
                     auto req = proto_ops::decode_publish(payload);
-                    if (!authority_ok(req.auth)) {
+                    if (!publish_authority_ok(req.auth)) {
                         std::cout << "EVIDENCE: STALE publish rejected boot=" << req.auth.boot
                                   << " epoch=" << req.auth.epoch << " gen=" << req.auth.generation << "\n";
                         throw_error(ErrorCode::kStaleAuthority, "stale publish authority");
@@ -90,7 +96,6 @@ public:
                     for (auto& b : data) b = Byte(req.fill);
                     auto fam = CheckpointFamilyId(req.family);
                     auto d = store_->make_full_descriptor(fam, OwnerId(1), data.size());
-                    d.producer_boot = WorkerBootId(req.auth.boot);
                     auto pub = store_->publish(d, ByteView(data.data(), data.size()));
                     std::cout << "EVIDENCE: committed checkpoint=" << pub.descriptor.id.value()
                               << " gen=" << d.generation.value() << " chunks=" << pub.manifest.chunks.size()
@@ -108,8 +113,8 @@ public:
                 }
                 case MessageKind::kRestore: {
                     auto [auth, rid] = proto_ops::decode_restore(payload);
-                    if (!authority_ok(auth)) {
-                        std::cout << "EVIDENCE: STALE restore rejected boot=" << auth.boot << "\n";
+                    if (!restore_authority_ok(auth)) {
+                        std::cout << "EVIDENCE: STALE restore rejected boot=" << auth.boot << " epoch=" << auth.epoch << "\n";
                         throw_error(ErrorCode::kStaleAuthority, "stale restore authority");
                     }
                     auto rc = store_->restore(RestoreId(1), CheckpointId(rid));
@@ -118,12 +123,39 @@ public:
                     return proto_ops::encode_restore_reply(static_cast<std::uint64_t>(rc.integrity),
                                                            rc.bytes.size());
                 }
+                case MessageKind::kRetire: {
+                    auto [auth, rid] = proto_ops::decode_restore(payload);
+                    if (!publish_authority_ok(auth)) {
+                        std::cout << "EVIDENCE: STALE retire rejected boot=" << auth.boot << " epoch=" << auth.epoch << "\n";
+                        throw_error(ErrorCode::kStaleAuthority, "stale retire authority");
+                    }
+                    store_->retire(CheckpointId(rid));
+                    std::cout << "EVIDENCE: retired checkpoint=" << rid << "\n";
+                    return proto_ops::encode_u64(rid);
+                }
                 case MessageKind::kGcRun: {
+                    auto [auth, z] = proto_ops::decode_restore(payload);
+                    (void)z;
+                    if (!publish_authority_ok(auth)) {
+                        std::cout << "EVIDENCE: STALE gc rejected boot=" << auth.boot << " epoch=" << auth.epoch << "\n";
+                        throw_error(ErrorCode::kStaleAuthority, "stale gc authority");
+                    }
                     auto plan = store_->gc_plan();
                     auto res = store_->gc_run();
                     std::cout << "EVIDENCE: gc reclaimed=" << res.reclaimed_blobs.size()
                               << " bytes=" << res.reclaimed_bytes << "\n";
                     return proto_ops::encode_u64(res.reclaimed_blobs.size());
+                }
+                case MessageKind::kRetain: {
+                    auto [fam, latest] = proto_ops::decode_retain(payload);
+                    RetentionPolicy pol;
+                    pol.id = RetentionPolicyId(1);
+                    pol.family_id = CheckpointFamilyId(fam);
+                    pol.retention_class = RetentionClass::kKeepLatestN;
+                    pol.latest_n = latest;
+                    store_->set_retention_policy(pol);
+                    std::cout << "EVIDENCE: retention latest_n=" << latest << " for family=" << fam << "\n";
+                    return proto_ops::encode_u64(latest);
                 }
                 case MessageKind::kSave: {
                     store_->save_state();
@@ -146,10 +178,13 @@ public:
 private:
     std::filesystem::path data_root_;
     std::unique_ptr<CheckpointStore> store_;
-    std::uint64_t boot_ = 1;
+    std::uint64_t active_boot_ = 0;
+    static constexpr std::uint64_t coordinator_boot_ = 0xEEEE;
     std::uint64_t epoch_ = 1;
     std::uint64_t stale_rejections_ = 0;
     std::vector<std::uint64_t> registered_;
+    std::set<std::uint64_t> roster_;
+    std::set<std::uint64_t> revoked_;
 };
 
 bool read_exact(SOCKET s, std::uint8_t* buf, int len) {
