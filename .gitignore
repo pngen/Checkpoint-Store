@@ -3,6 +3,7 @@
 /build-*/
 /out/
 /install/
+/install-prefix/
 cmake-build-*/
 
 # IDE / tooling
