@@ -27,3 +27,8 @@ cps_add_test(test_adversarial      test_adversarial.cpp)
 if(CHECKPOINTSTORE_ENABLE_SYNTHETIC_BACKENDS)
   cps_add_test(test_multiprocess    test_multiprocess.cpp)
 endif()
+# Includes the coordinator tool's source to drive its request dispatch directly.
+cps_add_test(test_regression       test_regression.cpp)
+if(WIN32)
+  target_link_libraries(test_regression PRIVATE ws2_32 wsock32)
+endif()

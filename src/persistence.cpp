@@ -608,7 +608,9 @@ void CheckpointStore::load_state() {
 
     BinReader r(body);
     coordinator_epoch_ = CoordinatorEpoch(r.u64());
-    options_.boot_id = r.id<detail::WorkerBootIdTag>();
+    // The persisted boot is the pre-restart incarnation's: recovery keeps this
+    // process's own boot as the live authority.
+    (void)r.id<detail::WorkerBootIdTag>();
     impl_->next_id_counter = r.u64();
     impl_->counters.integrity_failures = r.u64();
     impl_->counters.stale_rejections = r.u64();

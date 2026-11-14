@@ -58,7 +58,10 @@ public:
 
     void advance_epoch() {
         epoch_ += 1;
-        active_boot_ = 0;   // revoke the current incarnation's authority
+        // Revoke the current incarnation's authority: it does not regain it by
+        // registering again.
+        if (active_boot_ != 0) revoked_.insert(active_boot_);
+        active_boot_ = 0;
         std::cout << "EVIDENCE: epoch advanced to " << epoch_ << "; prior authority revoked\n";
         ++stale_rejections_;
     }

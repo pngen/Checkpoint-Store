@@ -5,4 +5,5 @@
 add_executable(cuda_proof cuda_proof.cu)
 target_link_libraries(cuda_proof PRIVATE checkpointstore)
 target_include_directories(cuda_proof PRIVATE ${CMAKE_SOURCE_DIR}/include)
-set_target_properties(cuda_proof PROPERTIES CUDA_STANDARD 17)
+# The library headers it includes are C++20.
+set_target_properties(cuda_proof PROPERTIES CUDA_STANDARD 20)

@@ -34,10 +34,10 @@ endif()
 set(checkpointstore_extra_defs "")
 
 if(MSVC)
-  add_compile_options(/W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/Zc:__cplusplus;/utf-8>")
   # 4324: structure padded due to alignment specifier (benign in value types)
   # 4514: unreferenced inline function was removed (generated code)
-  add_compile_options(/wd4324 /wd4514)
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/wd4324;/wd4514>")
   set(checkpointstore_extra_defs
       NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 else()
